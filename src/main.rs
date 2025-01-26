@@ -61,6 +61,12 @@ impl Kat {
     fn config_to_command(config: &Config) -> Command {
         let command = Command::new(&config.name)
             .about(&config.about)
+            .arg(Arg::new("path")
+                .value_name("PATH")
+                .default_value(".")
+                .help("Path to start from (file or directory)")
+                .required(false)
+                )
             .arg(Arg::new("included-paths")
                 .long("included-paths")
                 .help("Included paths")
@@ -89,12 +95,7 @@ impl Kat {
 
         command
     }
-/*
-    pub fn parse(configs: &Configs, args: &[String]) -> Result<ArgMatches> {
-        let kat_command = Kat::configs_to_command(configs);
-        Ok(kat_command.try_get_matches_from(args)?)
-    }
-*/
+
     pub fn parse(configs: &Configs, args: &[String]) -> Result<ArgMatches> {
         let kat_command = Kat::configs_to_command(configs);
         match kat_command.try_get_matches_from(args) {
@@ -107,18 +108,25 @@ impl Kat {
         }
     }
 
-    pub fn run_subcommand(&self, subcommand: &str) -> Result<()> {
+    pub fn run_subcommand(&self, subcommand: &str, path_override: Option<PathBuf>) -> Result<()> {
         let config = self.configs.get(subcommand).ok_or_else(|| eyre!("Config for '{}' not found", subcommand))?;
-        
+
+        let start_path = path_override.unwrap_or_else(|| PathBuf::from("."));
+
+        if start_path.is_file() {
+            self.print_file_content(&start_path)?;
+            return Ok(());
+        }
+
         let included_paths: Vec<PathBuf> = config
             .included_paths
             .iter()
-            .map(|p| PathBuf::from(p))
+            .map(|p| start_path.join(p))
             .collect();
         let excluded_paths: Vec<PathBuf> = config
             .excluded_paths
             .iter()
-            .map(|p| PathBuf::from(p))
+            .map(|p| start_path.join(p))
             .collect();
 
         for path in included_paths {
@@ -174,8 +182,9 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let matches = Kat::parse(&kat.configs, &args)?;
 
-    if let Some((subcommand, _)) = matches.subcommand() {
-        kat.run_subcommand(subcommand)?;
+    if let Some((subcommand, sub_matches)) = matches.subcommand() {
+        let path_override = sub_matches.get_one::<String>("path").map(PathBuf::from);
+        kat.run_subcommand(subcommand, path_override)?;
     } else {
         println!("No subcommand provided.");
     }
