@@ -1,0 +1,41 @@
+lets write a new rust program called 'kat'. 
+
+~/repos/scottidler/kat on  main [!?] is 📦 v0.1.0 via 🦀 v1.84.0 on ☁️   
+❯ bat -p Cargo.toml 
+[package]
+name = "kat"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5.27", features = ["string"] }
+dirs = "6.0.0"
+env_logger = "0.11.6"
+expanduser = "1.2.2"
+eyre = "0.6.12"
+log = "0.4.25"
+serde = { version = "1.0.217", features = ["derive"] }
+serde_yaml = "0.9.34"
+which = "7.0.1"
+
+-----
+
+the purpose of this program is to use bat -p or fallback to cat to concatenate all of the files in a directory, with one wrinkle it should print the relative path and filename of the file before catting out its contents.
+
+the program will take a subcommand named for the specific file found in ~/.config/kat/<name>.yaml
+
+for example there would be a subcommand called 'rat', if there was a file ~/.config/kat/rat.yml present
+
+there should be a struct for the contents of the configuration files located in ~/.config/kat/
+such that it has several sections 
+- included_paths
+- excluded_paths
+- included_types
+- excluded_types
+
+you must dynamically load subcommands based upon the files suffixed with .yml or .yaml found in ~/.config/kat/.
+
+you CANNOT have text to print to the console to mimic the output from Clap. all of that --help output MUST come from Clap!
+
+you MUST not use .unwrap(); instead eyre is there for a reason; use it
+
