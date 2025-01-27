@@ -87,7 +87,13 @@ impl Kat {
     }
 
     pub fn configs_to_command(configs: &Configs) -> Command {
-        let mut command = Command::new("kat").about("Concatenate files with metadata");
+        let mut command = Command::new("kat").about("Concatenate files with metadata")
+            .arg(Arg::new("debug")
+                 .short('d')
+                 .long("debug")
+                 .help("print only the paths, not the contents")
+                 .action(clap::ArgAction::SetTrue));
+
         for config in configs.values() {
             let subcommand = Kat::config_to_command(config);
             command = command.subcommand(subcommand);
@@ -108,13 +114,17 @@ impl Kat {
         }
     }
 
-    pub fn run_subcommand(&self, subcommand: &str, path_override: Option<PathBuf>) -> Result<()> {
+    pub fn run_subcommand(&self, subcommand: &str, path_override: Option<PathBuf>, debug: bool) -> Result<()> {
         let config = self.configs.get(subcommand).ok_or_else(|| eyre!("Config for '{}' not found", subcommand))?;
 
         let start_path = path_override.unwrap_or_else(|| PathBuf::from("."));
 
         if start_path.is_file() {
-            self.print_file_content(&start_path)?;
+            if debug {
+                println!("[DEBUG] Path: {}", start_path.display());
+            } else {
+                self.print_file_content(&start_path)?;
+            }
             return Ok(());
         }
 
@@ -135,14 +145,22 @@ impl Kat {
             }
 
             if path.is_file() {
-                self.print_file_content(&path)?;
+                if debug {
+                    println!("[DEBUG] Path: {}", path.display());
+                } else {
+                    self.print_file_content(&path)?;
+                }
             } else if path.is_dir() {
                 for entry in fs::read_dir(path)? {
                     let entry = entry?;
                     let file_path = entry.path();
 
                     if file_path.is_file() {
-                        self.print_file_content(&file_path)?;
+                        if debug {
+                            println!("[DEBUG] Path: {}", file_path.display());
+                        } else {
+                            self.print_file_content(&file_path)?;
+                        }
                     }
                 }
             }
@@ -181,10 +199,11 @@ fn main() -> Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     let matches = Kat::parse(&kat.configs, &args)?;
+    let debug = matches.get_flag("debug");
 
     if let Some((subcommand, sub_matches)) = matches.subcommand() {
         let path_override = sub_matches.get_one::<String>("path").map(PathBuf::from);
-        kat.run_subcommand(subcommand, path_override)?;
+        kat.run_subcommand(subcommand, path_override, debug)?;
     } else {
         println!("No subcommand provided.");
     }
