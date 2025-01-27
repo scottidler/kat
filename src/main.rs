@@ -1,7 +1,14 @@
 use clap::{Arg, ArgMatches, Command};
 use eyre::{eyre, Result};
+use glob::glob;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs, path::{Path, PathBuf}, process::Command as ShellCommand};
+use std::{
+    collections::HashMap,
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+    process::Command as ShellCommand,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Config {
@@ -61,38 +68,50 @@ impl Kat {
     fn config_to_command(config: &Config) -> Command {
         let command = Command::new(&config.name)
             .about(&config.about)
-            .arg(Arg::new("path")
-                .value_name("PATH")
-                .default_value(".")
-                .help("Path to start from (file or directory)")
-                .required(false)
-                )
-            .arg(Arg::new("included-paths")
-                .long("included-paths")
-                .help("Included paths")
-                .default_values(&config.included_paths))
-            .arg(Arg::new("excluded-paths")
-                .long("excluded-paths")
-                .help("Excluded paths")
-                .default_values(&config.excluded_paths))
-            .arg(Arg::new("included-types")
-                .long("included-types")
-                .help("Included types")
-                .default_values(&config.included_types))
-            .arg(Arg::new("excluded-types")
-                .long("excluded-types")
-                .help("Excluded types")
-                .default_values(&config.excluded_types));
+            .arg(
+                Arg::new("path")
+                    .value_name("PATH")
+                    .default_value(".")
+                    .help("Path to start from (file or directory)")
+                    .required(false),
+            )
+            .arg(
+                Arg::new("included-paths")
+                    .long("included-paths")
+                    .help("Included paths")
+                    .default_values(&config.included_paths),
+            )
+            .arg(
+                Arg::new("excluded-paths")
+                    .long("excluded-paths")
+                    .help("Excluded paths")
+                    .default_values(&config.excluded_paths),
+            )
+            .arg(
+                Arg::new("included-types")
+                    .long("included-types")
+                    .help("Included types")
+                    .default_values(&config.included_types),
+            )
+            .arg(
+                Arg::new("excluded-types")
+                    .long("excluded-types")
+                    .help("Excluded types")
+                    .default_values(&config.excluded_types),
+            );
         command
     }
 
     pub fn configs_to_command(configs: &Configs) -> Command {
-        let mut command = Command::new("kat").about("Concatenate files with metadata")
-            .arg(Arg::new("debug")
-                 .short('d')
-                 .long("debug")
-                 .help("print only the paths, not the contents")
-                 .action(clap::ArgAction::SetTrue));
+        let mut command = Command::new("kat")
+            .about("Concatenate files with metadata")
+            .arg(
+                Arg::new("debug")
+                    .short('d')
+                    .long("debug")
+                    .help("print only the paths, not the contents")
+                    .action(clap::ArgAction::SetTrue),
+            );
 
         for config in configs.values() {
             let subcommand = Kat::config_to_command(config);
@@ -115,58 +134,63 @@ impl Kat {
     }
 
     pub fn run_subcommand(&self, subcommand: &str, path_override: Option<PathBuf>, debug: bool) -> Result<()> {
-        let config = self.configs.get(subcommand).ok_or_else(|| eyre!("Config for '{}' not found", subcommand))?;
+        let config = self
+            .configs
+            .get(subcommand)
+            .ok_or_else(|| eyre!("Config for '{}' not found", subcommand))?;
 
-        let start_path = path_override.unwrap_or_else(|| PathBuf::from("."));
+        let start_path = path_override
+            .map(fs::canonicalize)
+            .transpose()?
+            .unwrap_or_else(|| PathBuf::from(".").canonicalize().unwrap());
 
-        if start_path.is_file() {
-            if debug {
-                println!("[DEBUG] Path: {}", start_path.display());
-            } else {
-                self.print_file_content(&start_path)?;
+        let matched_files = self.find_and_filter_files(&start_path, &config.included_paths, &config.excluded_paths)?;
+
+        if debug {
+            for file in &matched_files {
+                println!("{}", file.display());
             }
             return Ok(());
         }
 
-        let included_paths: Vec<PathBuf> = config
-            .included_paths
-            .iter()
-            .map(|p| start_path.join(p))
-            .collect();
-        let excluded_paths: Vec<PathBuf> = config
-            .excluded_paths
-            .iter()
-            .map(|p| start_path.join(p))
-            .collect();
+        for file in matched_files {
+            self.print_file_content(&file)?;
+        }
 
-        for path in included_paths {
-            if excluded_paths.contains(&path) {
-                continue;
-            }
+        Ok(())
+    }
 
-            if path.is_file() {
-                if debug {
-                    println!("[DEBUG] Path: {}", path.display());
-                } else {
-                    self.print_file_content(&path)?;
-                }
-            } else if path.is_dir() {
-                for entry in fs::read_dir(path)? {
-                    let entry = entry?;
-                    let file_path = entry.path();
+    fn find_and_filter_files(&self, base_path: &Path, include_patterns: &[String], exclude_patterns: &[String]) -> Result<Vec<PathBuf>> {
+        let mut included_files = HashSet::new();
 
-                    if file_path.is_file() {
-                        if debug {
-                            println!("[DEBUG] Path: {}", file_path.display());
-                        } else {
-                            self.print_file_content(&file_path)?;
-                        }
+        for pattern in include_patterns {
+            let full_pattern = base_path.join(pattern).to_string_lossy().to_string();
+            for entry in glob(&full_pattern)? {
+                if let Ok(path) = entry {
+                    if path.is_file() && !self.is_excluded(&path, base_path, exclude_patterns)? {
+                        included_files.insert(path);
                     }
                 }
             }
         }
 
-        Ok(())
+        Ok(included_files.into_iter().collect())
+    }
+
+    fn is_excluded(&self, path: &Path, base_path: &Path, exclude_patterns: &[String]) -> Result<bool> {
+        for pattern in exclude_patterns {
+            let full_pattern = base_path.join(pattern).to_string_lossy().to_string();
+            if let Ok(glob_iter) = glob(&full_pattern) {
+                for entry in glob_iter {
+                    if let Ok(excluded_path) = entry {
+                        if path.starts_with(&excluded_path) {
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(false)
     }
 
     fn print_file_content(&self, path: &Path) -> Result<()> {
