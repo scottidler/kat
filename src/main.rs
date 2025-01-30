@@ -269,14 +269,17 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let matches = Kat::parse(&kat.configs, &args)?;
 
+    if matches.subcommand().is_none() {
+        println!("{}", Kat::configs_to_command(&kat.configs).render_help());
+        std::process::exit(0);
+    }
+
     let show_patterns = matches.get_flag("show-patterns");
     let show_paths = matches.get_flag("show-paths");
 
     if let Some((subcommand, sub_matches)) = matches.subcommand() {
         let path_override = sub_matches.get_one::<String>("path").map(PathBuf::from);
         kat.run_subcommand(subcommand, path_override, show_patterns, show_paths)?;
-    } else {
-        println!("No subcommand provided.");
     }
 
     Ok(())
