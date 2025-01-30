@@ -169,7 +169,8 @@ impl Kat {
             .map(|p| start_path.join(p).to_string_lossy().to_string())
             .collect();
 
-        let matched_files = self.find_and_filter_files(&start_path, &resolved_included_paths, &resolved_excluded_paths)?;
+        let matched_files =
+            self.find_and_filter_files(&start_path, &resolved_included_paths, &resolved_excluded_paths)?;
 
         if show_patterns {
             println!("included:");
@@ -199,7 +200,12 @@ impl Kat {
         Ok(matched_files)
     }
 
-    fn find_and_filter_files(&self, base_path: &Path, include_patterns: &[String], exclude_patterns: &[String]) -> Result<Vec<PathBuf>> {
+    fn find_and_filter_files(
+        &self,
+        base_path: &Path,
+        include_patterns: &[String],
+        exclude_patterns: &[String],
+    ) -> Result<Vec<PathBuf>> {
         let mut included_files = HashSet::new();
 
         for pattern in include_patterns {
