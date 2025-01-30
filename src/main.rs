@@ -133,7 +133,12 @@ impl Kat {
         }
     }
 
-    pub fn run_subcommand(&self, subcommand: &str, path_override: Option<PathBuf>, debug: bool) -> Result<()> {
+    pub fn run_subcommand(
+        &self,
+        subcommand: &str,
+        path_override: Option<PathBuf>,
+        debug: bool,
+    ) -> Result<Vec<PathBuf>> {
         let config = self
             .configs
             .get(subcommand)
@@ -144,20 +149,46 @@ impl Kat {
             .transpose()?
             .unwrap_or_else(|| PathBuf::from(".").canonicalize().unwrap());
 
-        let matched_files = self.find_and_filter_files(&start_path, &config.included_paths, &config.excluded_paths)?;
+        let resolved_included_paths: Vec<String> = config
+            .included_paths
+            .iter()
+            .map(|p| start_path.join(p).to_string_lossy().to_string())
+            .collect();
+
+        let resolved_excluded_paths: Vec<String> = config
+            .excluded_paths
+            .iter()
+            .map(|p| start_path.join(p).to_string_lossy().to_string())
+            .collect();
+
+        let matched_files = self.find_and_filter_files(&start_path, &resolved_included_paths, &resolved_excluded_paths)?;
 
         if debug {
-            for file in &matched_files {
-                println!("{}", file.display());
+            println!("included:");
+            for path in &resolved_included_paths {
+                println!("  {}", path);
             }
-            return Ok(());
+
+            println!("excluded:");
+            for path in &resolved_excluded_paths {
+                println!("  {}", path);
+            }
+
+            println!("{:-<91}", "");
+
+            println!("results:");
+            for file in &matched_files {
+                println!("  {}", file.display());
+            }
+
+            return Ok(matched_files);
         }
 
-        for file in matched_files {
-            self.print_file_content(&file)?;
+        for file in &matched_files {
+            self.print_file_content(file)?;
         }
 
-        Ok(())
+        Ok(matched_files)
     }
 
     fn find_and_filter_files(&self, base_path: &Path, include_patterns: &[String], exclude_patterns: &[String]) -> Result<Vec<PathBuf>> {
@@ -234,3 +265,225 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::collections::HashSet;
+
+    fn process_path_for_test(path: PathBuf) -> String {
+        path.strip_prefix(std::env::current_dir().unwrap())
+            .unwrap()
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn load_config_from_string(config_str: &str) -> Config {
+        serde_yaml::from_str(config_str).expect("Failed to parse YAML configuration")
+    }
+
+    fn create_kat_with_config(config_name: &str, config_str: &str) -> Kat {
+        let mut configs = HashMap::new();
+        let config: Config = load_config_from_string(config_str);
+        configs.insert(config_name.to_string(), config);
+        Kat { configs }
+    }
+
+    #[test]
+    fn test_rust_directory() -> Result<()> {
+        let rust_config = r#"
+        about: "Concatenates Rust-related files"
+        included_paths:
+          - "Cargo.toml"
+          - "build.rs"
+          - "src/**/*.rs"
+          - "examples/**/*.rs"
+          - "tests/**/*.rs"
+          - "benches/**/*.rs"
+        excluded_paths:
+          - "target/**"
+          - ".git/**"
+          - ".github/**"
+          - "**/.idea/**"
+          - "**/.DS_Store"
+        included_types:
+          - "rs"
+          - "toml"
+        excluded_types:
+          - "bin"
+          - "exe"
+          - "o"
+          - "so"
+        "#;
+
+        let kat = create_kat_with_config("rust", rust_config);
+        let matched_files = kat
+            .run_subcommand("rust", Some(PathBuf::from("examples/rust")), true)?
+            .into_iter()
+            .map(process_path_for_test)
+            .collect::<HashSet<_>>();
+
+        let expected: HashSet<String> = [
+            "examples/rust/Cargo.toml",
+            "examples/rust/build.rs",
+            "examples/rust/src/main.rs",
+            "examples/rust/src/lib/config.rs",
+            "examples/rust/src/lib/feature1.rs",
+            "examples/rust/src/lib/feature2.rs",
+            "examples/rust/src/lib/mod.rs",
+            "examples/rust/src/utils/helper1.rs",
+            "examples/rust/src/utils/helper2.rs",
+            "examples/rust/src/utils/mod.rs",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        assert_eq!(matched_files, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_python_directory() -> Result<()> {
+        let python_config = r#"
+        about: "Concatenates Python-related files"
+        included_paths:
+          - "**/*.py"
+          - "**/*.toml"
+          - "**/*.txt"
+          - "**/*.md"
+        excluded_paths:
+          - "**/.*"
+          - ".git/**"
+          - ".github/**"
+          - "**/__pycache__/**"
+        included_types:
+          - "py"
+          - "toml"
+          - "txt"
+          - "md"
+        excluded_types:
+          - "pyc"
+        "#;
+
+        let kat = create_kat_with_config("python", python_config);
+        let matched_files = kat
+            .run_subcommand("python", Some(PathBuf::from("examples/python")), true)?
+            .into_iter()
+            .map(process_path_for_test)
+            .collect::<HashSet<_>>();
+
+        let expected: HashSet<String> = [
+            "examples/python/main.py",
+            "examples/python/README.md",
+            "examples/python/pyproject.toml",
+            "examples/python/requirements.txt",
+            "examples/python/setup.py",
+            "examples/python/scripts/deploy.py",
+            "examples/python/scripts/generate_config.py",
+            "examples/python/project/core/module1.py",
+            "examples/python/project/core/module2.py",
+            "examples/python/project/core/utils.py",
+            "examples/python/project/data/loader.py",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        assert_eq!(matched_files, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_toml_directory() -> Result<()> {
+        let toml_config = r#"
+        about: "Concatenates TOML-related files"
+        included_paths:
+          - "**/*.toml"
+        excluded_paths:
+          - "**/.*"
+          - ".git/**"
+          - ".github/**"
+          - "workflows/**"
+          - "archive/**"
+        included_types:
+          - "toml"
+        excluded_types:
+          - "bin"
+          - "exe"
+          - "o"
+          - "so"
+        "#;
+
+        let kat = create_kat_with_config("toml", toml_config);
+        let matched_files = kat
+            .run_subcommand("toml", Some(PathBuf::from("examples/toml")), true)?
+            .into_iter()
+            .map(process_path_for_test)
+            .collect::<HashSet<_>>();
+
+        let expected: HashSet<String> = [
+            "examples/toml/config.toml",
+            "examples/toml/data/config_backup.toml",
+            "examples/toml/data/data_schema.toml",
+            "examples/toml/setup/deploy.toml",
+            "examples/toml/setup/environment.toml",
+            "examples/toml/setup/deploy_backup.toml",
+            "examples/toml/templates/base.toml",
+            "examples/toml/templates/schema.toml",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        assert_eq!(matched_files, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_yaml_directory() -> Result<()> {
+        let yaml_config = r#"
+        about: "Concatenates YAML-related files"
+        included_paths:
+          - "**/*.yaml"
+          - "**/*.yml"
+        excluded_paths:
+          - "**/.*"
+          - ".git/**"
+          - ".github/**"
+          - "workflows/**"
+          - "archive/**"
+        included_types:
+          - "yaml"
+          - "yml"
+        excluded_types:
+          - "bin"
+          - "exe"
+          - "o"
+          - "so"
+        "#;
+
+        let kat = create_kat_with_config("yaml", yaml_config);
+        let matched_files = kat
+            .run_subcommand("yaml", Some(PathBuf::from("examples/yaml")), true)?
+            .into_iter()
+            .map(process_path_for_test)
+            .collect::<HashSet<_>>();
+
+        let expected: HashSet<String> = [
+            "examples/yaml/config.yaml",
+            "examples/yaml/data/data_schema.yaml",
+            "examples/yaml/setup/deploy.yaml",
+            "examples/yaml/templates/base.yaml",
+            "examples/yaml/templates/schema.yml",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        assert_eq!(matched_files, expected);
+        Ok(())
+    }
+}
+
