@@ -279,7 +279,16 @@ impl Kat {
 }
 
 fn main() -> Result<()> {
-    let log_file = "./kat.log";
+    let log_file = dirs::cache_dir()
+        .map(|p| {
+            let log_dir = p.join("kat");
+            if !log_dir.exists() {
+                fs::create_dir_all(&log_dir).expect("Failed to create log directory");
+            }
+            log_dir.join("kat.log")
+        })
+        .unwrap_or_else(|| PathBuf::from("./kat.log"));
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format(|buf, record| {
             writeln!(
