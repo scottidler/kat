@@ -1,14 +1,17 @@
+use std::io::Write;
 use clap::{Arg, ArgMatches, Command};
 use eyre::{eyre, Result};
-use glob::glob;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     process::Command as ShellCommand,
 };
+use log::{info, debug, error};
+
+use walkdir::WalkDir;
+use globset::{Glob, GlobSetBuilder};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Config {
@@ -30,12 +33,14 @@ struct Kat {
 
 impl Kat {
     fn new(config_dir: PathBuf) -> Result<Self> {
+        info!("Initializing Kat with config directory: {}", config_dir.display());
         let configs = Kat::load_configs(&config_dir)?;
         Ok(Self { configs })
     }
 
     fn load_configs(config_dir: &Path) -> Result<Configs> {
         if !config_dir.exists() {
+            error!("Config directory not found: {}", config_dir.display());
             return Err(eyre!("Config directory not found: {}", config_dir.display()));
         }
 
@@ -48,6 +53,7 @@ impl Kat {
             if path.is_file() {
                 if let Some(extension) = path.extension() {
                     if extension == "yml" || extension == "yaml" {
+                        info!("Loading config file: {}", path.display());
                         let config_content = fs::read_to_string(&path)?;
                         let mut config: Config = serde_yaml::from_str(&config_content)?;
 
@@ -55,6 +61,7 @@ impl Kat {
                             if let Some(name) = file_name.to_str() {
                                 config.name = name.to_string();
                                 configs.insert(name.to_string(), config);
+                                debug!("Added config: {}", name);
                             }
                         }
                     }
@@ -206,36 +213,50 @@ impl Kat {
         include_patterns: &[String],
         exclude_patterns: &[String],
     ) -> Result<Vec<PathBuf>> {
-        let mut included_files = HashSet::new();
+        let mut include_builder = GlobSetBuilder::new();
+        for pat in include_patterns {
+            let pattern_path = Path::new(pat);
+            let rel_pattern = if pattern_path.is_absolute() {
+                pattern_path
+                    .strip_prefix(base_path)
+                    .unwrap_or(pattern_path)
+                    .to_string_lossy()
+                    .to_string()
+            } else {
+                pat.clone()
+            };
+            include_builder.add(Glob::new(&rel_pattern)?);
+        }
+        let include_set = include_builder.build()?;
 
-        for pattern in include_patterns {
-            let full_pattern = base_path.join(pattern).to_string_lossy().to_string();
-            for entry in glob(&full_pattern)? {
-                if let Ok(path) = entry {
-                    if path.is_file() && !self.is_excluded(&path, base_path, exclude_patterns)? {
-                        included_files.insert(path);
-                    }
-                }
+        let mut exclude_builder = GlobSetBuilder::new();
+        for pat in exclude_patterns {
+            let pattern_path = Path::new(pat);
+            let rel_pattern = if pattern_path.is_absolute() {
+                pattern_path
+                    .strip_prefix(base_path)
+                    .unwrap_or(pattern_path)
+                    .to_string_lossy()
+                    .to_string()
+            } else {
+                pat.clone()
+            };
+            exclude_builder.add(Glob::new(&rel_pattern)?);
+        }
+        let exclude_set = exclude_builder.build()?;
+
+        let mut results = Vec::new();
+        for entry in WalkDir::new(base_path) {
+            let entry = entry?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let rel_path = entry.path().strip_prefix(base_path)?;
+            if include_set.is_match(rel_path) && !exclude_set.is_match(rel_path) {
+                results.push(entry.path().to_path_buf());
             }
         }
-
-        Ok(included_files.into_iter().collect())
-    }
-
-    fn is_excluded(&self, path: &Path, base_path: &Path, exclude_patterns: &[String]) -> Result<bool> {
-        for pattern in exclude_patterns {
-            let full_pattern = base_path.join(pattern).to_string_lossy().to_string();
-            if let Ok(glob_iter) = glob(&full_pattern) {
-                for entry in glob_iter {
-                    if let Ok(excluded_path) = entry {
-                        if path.starts_with(&excluded_path) {
-                            return Ok(true);
-                        }
-                    }
-                }
-            }
-        }
-        Ok(false)
+        Ok(results)
     }
 
     fn print_file_content(&self, path: &Path) -> Result<()> {
@@ -258,7 +279,19 @@ impl Kat {
 }
 
 fn main() -> Result<()> {
-    env_logger::init();
+    let log_file = "./kat.log";
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "{} [{}] {}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                record.level(),
+                record.args()
+            )
+        })
+        .target(env_logger::Target::Pipe(Box::new(fs::File::create(log_file)?)))
+        .init();
 
     let config_dir = dirs::config_dir()
         .ok_or_else(|| eyre!("Failed to locate config directory"))?
@@ -267,6 +300,7 @@ fn main() -> Result<()> {
     let kat = Kat::new(config_dir)?;
 
     let args: Vec<String> = std::env::args().collect();
+    info!("Parsing arguments: {:?}", args);
     let matches = Kat::parse(&kat.configs, &args)?;
 
     if matches.subcommand().is_none() {
