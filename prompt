@@ -1,7 +1,7 @@
-lets write a new rust program called 'kat'. 
+lets write a new rust program called 'kat'.
 
-~/repos/scottidler/kat on  main [!?] is 📦 v0.1.0 via 🦀 v1.84.0 on ☁️   
-❯ bat -p Cargo.toml 
+~/repos/scottidler/kat on  main [!?] is 📦 v0.1.0 via 🦀 v1.84.0 on ☁️
+❯ bat -p Cargo.toml
 [package]
 name = "kat"
 version = "0.1.0"
@@ -27,7 +27,7 @@ the program will take a subcommand named for the specific file found in ~/.confi
 for example there would be a subcommand called 'rat', if there was a file ~/.config/kat/rat.yml present
 
 there should be a struct for the contents of the configuration files located in ~/.config/kat/
-such that it has several sections 
+such that it has several sections
 - included_paths
 - excluded_paths
 - included_types
