@@ -31,6 +31,44 @@ struct Kat {
     configs: Configs,
 }
 
+impl Config {
+    /// Construct a Config from clap’s ArgMatches (for “ptns” cases)
+    fn from_matches(name: &str, about: &str, sub_m: &ArgMatches) -> Config {
+        let included_paths = if let Some(vals) = sub_m.get_many::<String>("included-paths") {
+            vals.map(|s| s.to_string()).collect()
+        } else {
+            Vec::new()
+        };
+
+        let excluded_paths = if let Some(vals) = sub_m.get_many::<String>("excluded-paths") {
+            vals.map(|s| s.to_string()).collect()
+        } else {
+            Vec::new()
+        };
+
+        let included_types = if let Some(vals) = sub_m.get_many::<String>("included-types") {
+            vals.map(|s| s.to_string()).collect()
+        } else {
+            Vec::new()
+        };
+
+        let excluded_types = if let Some(vals) = sub_m.get_many::<String>("excluded-types") {
+            vals.map(|s| s.to_string()).collect()
+        } else {
+            Vec::new()
+        };
+
+        Config {
+            name: name.to_string(),
+            about: about.to_string(),
+            included_paths,
+            excluded_paths,
+            included_types,
+            excluded_types,
+        }
+    }
+}
+
 impl Kat {
     fn new(config_dir: PathBuf) -> Result<Self> {
         info!("Initializing Kat with config directory: {}", config_dir.display());
@@ -57,11 +95,11 @@ impl Kat {
                         let config_content = fs::read_to_string(&path)?;
                         let mut config: Config = serde_yaml::from_str(&config_content)?;
 
-                        if let Some(file_name) = path.file_stem() {
-                            if let Some(name) = file_name.to_str() {
-                                config.name = name.to_string();
-                                configs.insert(name.to_string(), config);
-                                debug!("Added config: {}", name);
+                        if let Some(file_stem) = path.file_stem() {
+                            if let Some(name_str) = file_stem.to_str() {
+                                config.name = name_str.to_string();
+                                configs.insert(name_str.to_string(), config);
+                                debug!("Added config: {}", name_str);
                             }
                         }
                     }
@@ -73,42 +111,37 @@ impl Kat {
     }
 
     fn config_to_command(config: &Config) -> Command {
-        let command = Command::new(&config.name)
+        let cmd = Command::new(&config.name)
             .about(&config.about)
             .arg(
                 Arg::new("path")
+                    .short('p')
+                    .long("path")
                     .value_name("PATH")
                     .default_value(".")
                     .help("Path to start from (file or directory)")
                     .required(false),
-            )
-            .arg(
-                Arg::new("included-paths")
-                    .long("included-paths")
-                    .help("Included paths")
-                    .default_values(&config.included_paths),
-            )
-            .arg(
-                Arg::new("excluded-paths")
-                    .long("excluded-paths")
-                    .help("Excluded paths")
-                    .default_values(&config.excluded_paths),
-            )
-            .arg(
-                Arg::new("included-types")
-                    .long("included-types")
-                    .help("Included types")
-                    .default_values(&config.included_types),
-            )
-            .arg(
-                Arg::new("excluded-types")
-                    .long("excluded-types")
-                    .help("Excluded types")
-                    .default_values(&config.excluded_types),
             );
-        command
+        Kat::add_common_args(cmd, Some(config))
     }
 
+    fn create_ptns_command() -> Command {
+        let cmd = Command::new("ptns")
+            .about("Use arbitrary glob patterns instead of a YAML config")
+            .arg(
+                Arg::new("path")
+                    .short('p')
+                    .long("path")
+                    .value_name("PATH")
+                    .default_value(".")
+                    .help("Path to start from (file or directory)")
+                    .required(false),
+            );
+        Kat::add_common_args(cmd, None)
+    }
+
+    /// Build the top‐level `kat` command, register all dynamic subcommands first,
+    /// then append the "ptns" subcommand last.
     pub fn configs_to_command(configs: &Configs) -> Command {
         let mut command = Command::new("kat")
             .about("Concatenate files with metadata")
@@ -127,12 +160,68 @@ impl Kat {
                     .action(clap::ArgAction::SetTrue),
             );
 
+        // Register all YAML-based subcommands:
         for config in configs.values() {
             let subcommand = Kat::config_to_command(config);
             command = command.subcommand(subcommand);
         }
 
+        // Append the ad-hoc "ptns" command:
+        let ptns_cmd = Kat::create_ptns_command();
+        command = command.subcommand(ptns_cmd);
+
         command
+    }
+
+    /// Add “included-paths”, “excluded-paths”, “included-types”, and “excluded-types”
+    /// arguments to a given Command. When `config` is `Some(cfg)`, set default_values
+    /// from `cfg`. Otherwise leave defaults empty, requiring the user to supply at least one.
+    fn add_common_args(mut cmd: Command, config: Option<&Config>) -> Command {
+        let mut inc_paths = Arg::new("included-paths")
+            .short('i')
+            .long("included-paths")
+            .help("Included paths")
+            .num_args(1..)
+            .value_delimiter(' ');
+        if let Some(cfg) = config {
+            inc_paths = inc_paths.default_values(&cfg.included_paths);
+        }
+        cmd = cmd.arg(inc_paths);
+
+        let mut exc_paths = Arg::new("excluded-paths")
+            .short('x')
+            .long("excluded-paths")
+            .help("Excluded paths")
+            .num_args(1..)
+            .value_delimiter(' ');
+        if let Some(cfg) = config {
+            exc_paths = exc_paths.default_values(&cfg.excluded_paths);
+        }
+        cmd = cmd.arg(exc_paths);
+
+        let mut inc_types = Arg::new("included-types")
+            .short('I')
+            .long("included-types")
+            .help("Included types")
+            .num_args(1..)
+            .value_delimiter(' ');
+        if let Some(cfg) = config {
+            inc_types = inc_types.default_values(&cfg.included_types);
+        }
+        cmd = cmd.arg(inc_types);
+
+        let mut exc_types = Arg::new("excluded-types")
+            .short('X')
+            .long("excluded-types")
+            .help("Excluded types")
+            .num_args(1..)
+            .value_delimiter(' ');
+        if let Some(cfg) = config {
+            exc_types = exc_types.default_values(&cfg.excluded_types);
+        }
+        cmd = cmd.arg(exc_types);
+
+        cmd
     }
 
     pub fn parse(configs: &Configs, args: &[String]) -> Result<ArgMatches> {
@@ -199,8 +288,8 @@ impl Kat {
         }
 
         if !show_patterns && !show_paths {
-            for file in &matched_files {
-                self.print_file_content(file)?;
+            for (index, file) in matched_files.iter().enumerate() {
+                self.print_file_content(file, index > 0)?;
             }
         }
 
@@ -259,7 +348,10 @@ impl Kat {
         Ok(results)
     }
 
-    fn print_file_content(&self, path: &Path) -> Result<()> {
+    fn print_file_content(&self, path: &Path, add_spacing: bool) -> Result<()> {
+        if add_spacing {
+            println!();
+        }
         println!("--- {} ---", path.display());
 
         let bat_available = ShellCommand::new("bat").output().is_ok();
@@ -278,7 +370,24 @@ impl Kat {
     }
 }
 
+/// Handles the “ptns” subcommand by constructing a Config from the matches,
+/// building a temporary Kat instance, and immediately running it.
+fn handle_ptns_subcommand(sub_m: &ArgMatches, show_patterns: bool, show_paths: bool) -> Result<()> {
+    let ptns_config = Config::from_matches("ptns", "ad-hoc pattern run", sub_m);
+
+    // Build a temporary Kat instance with only this “ptns” config
+    let mut one_config_map = HashMap::new();
+    one_config_map.insert("ptns".to_string(), ptns_config);
+    let ad_hoc_kat = Kat { configs: one_config_map };
+
+    // Determine whether the user passed a “path” override
+    let path_override = sub_m.get_one::<String>("path").map(PathBuf::from);
+    ad_hoc_kat.run_subcommand("ptns", path_override, show_patterns, show_paths)?;
+    std::process::exit(0);
+}
+
 fn main() -> Result<()> {
+    // Set up logging to ~/.cache/kat/kat.log
     let log_file = dirs::cache_dir()
         .map(|p| {
             let log_dir = p.join("kat");
@@ -302,6 +411,7 @@ fn main() -> Result<()> {
         .target(env_logger::Target::Pipe(Box::new(fs::File::create(log_file)?)))
         .init();
 
+    // Load ~/.config/kat/ for YAML configs
     let config_dir = dirs::config_dir()
         .ok_or_else(|| eyre!("Failed to locate config directory"))?
         .join("kat");
@@ -312,6 +422,7 @@ fn main() -> Result<()> {
     info!("Parsing arguments: {:?}", args);
     let matches = Kat::parse(&kat.configs, &args)?;
 
+    // If no subcommand was provided, show help and exit
     if matches.subcommand().is_none() {
         println!("{}", Kat::configs_to_command(&kat.configs).render_help());
         std::process::exit(0);
@@ -320,6 +431,12 @@ fn main() -> Result<()> {
     let show_patterns = matches.get_flag("show-patterns");
     let show_paths = matches.get_flag("show-paths");
 
+    // Handle the ad-hoc “ptns” subcommand
+    if let Some(("ptns", sub_m)) = matches.subcommand() {
+        handle_ptns_subcommand(sub_m, show_patterns, show_paths)?;
+    }
+
+    // Otherwise, handle a normal YAML-based subcommand
     if let Some((subcommand, sub_matches)) = matches.subcommand() {
         let path_override = sub_matches.get_one::<String>("path").map(PathBuf::from);
         kat.run_subcommand(subcommand, path_override, show_patterns, show_paths)?;
@@ -347,7 +464,8 @@ mod tests {
 
     fn create_kat_with_config(config_name: &str, config_str: &str) -> Kat {
         let mut configs = HashMap::new();
-        let config: Config = load_config_from_string(config_str);
+        let mut config: Config = load_config_from_string(config_str);
+        config.name = config_name.to_string();
         configs.insert(config_name.to_string(), config);
         Kat { configs }
     }
@@ -371,8 +489,9 @@ mod tests {
           - "**/.idea/**"
           - "**/.DS_Store"
           - "examples/rust/**"
-          - "examples/rust/*.rs"
-          - "examples/rust/**/.rs"
+          - "examples/rust/Cargo.toml"
+          - "examples/rust/build.rs"
+          - "examples/rust/src/**"
         included_types:
           - "rs"
           - "toml"
