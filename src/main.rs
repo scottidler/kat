@@ -145,6 +145,7 @@ impl Kat {
     pub fn configs_to_command(configs: &Configs) -> Command {
         let mut command = Command::new("kat")
             .about("Concatenate files with metadata")
+            .version(env!("GIT_DESCRIBE"))
             .arg(
                 Arg::new("show-patterns")
                     .short('P')
