@@ -1,17 +1,17 @@
-use std::io::Write;
 use clap::{Arg, ArgMatches, Command};
 use eyre::{eyre, Result};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
     process::Command as ShellCommand,
 };
-use log::{info, debug, error};
 
-use walkdir::WalkDir;
 use globset::{Glob, GlobSetBuilder};
+use walkdir::WalkDir;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Config {
@@ -111,17 +111,15 @@ impl Kat {
     }
 
     fn config_to_command(config: &Config) -> Command {
-        let cmd = Command::new(&config.name)
-            .about(&config.about)
-            .arg(
-                Arg::new("path")
-                    .short('p')
-                    .long("path")
-                    .value_name("PATH")
-                    .default_value(".")
-                    .help("Path to start from (file or directory)")
-                    .required(false),
-            );
+        let cmd = Command::new(&config.name).about(&config.about).arg(
+            Arg::new("path")
+                .short('p')
+                .long("path")
+                .value_name("PATH")
+                .default_value(".")
+                .help("Path to start from (file or directory)")
+                .required(false),
+        );
         Kat::add_common_args(cmd, Some(config))
     }
 
@@ -379,12 +377,29 @@ fn handle_ptns_subcommand(sub_m: &ArgMatches, show_patterns: bool, show_paths: b
     // Build a temporary Kat instance with only this “ptns” config
     let mut one_config_map = HashMap::new();
     one_config_map.insert("ptns".to_string(), ptns_config);
-    let ad_hoc_kat = Kat { configs: one_config_map };
+    let ad_hoc_kat = Kat {
+        configs: one_config_map,
+    };
 
     // Determine whether the user passed a “path” override
     let path_override = sub_m.get_one::<String>("path").map(PathBuf::from);
     ad_hoc_kat.run_subcommand("ptns", path_override, show_patterns, show_paths)?;
     std::process::exit(0);
+}
+
+/// XDG config dir, honoring `$XDG_CONFIG_HOME` and falling back to `$HOME/.config`.
+///
+/// We deliberately do NOT use `dirs::config_dir()`: it honors `$XDG_CONFIG_HOME` only on
+/// Linux. On macOS it resolves via system APIs and returns `~/Library/Application Support`,
+/// ignoring the env var. This helper resolves to the same XDG layout on every platform.
+fn xdg_config_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
+        let path = PathBuf::from(dir);
+        if path.is_absolute() {
+            return Some(path);
+        }
+    }
+    dirs::home_dir().map(|h| h.join(".config"))
 }
 
 fn main() -> Result<()> {
@@ -413,7 +428,7 @@ fn main() -> Result<()> {
         .init();
 
     // Load ~/.config/kat/ for YAML configs
-    let config_dir = dirs::config_dir()
+    let config_dir = xdg_config_dir()
         .ok_or_else(|| eyre!("Failed to locate config directory"))?
         .join("kat");
 
